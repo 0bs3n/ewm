@@ -5,10 +5,11 @@
 #include <stdlib.h>
 #include "window_manager.h"
 
-#define MOD ControlMask
+#define MOD Mod4Mask
 #define NO_WINDOW 0x0
 
 ewm_instance wm;
+XWindowAttributes saved_window_state;
 
 void 
 ewm_init()
@@ -19,8 +20,45 @@ ewm_init()
         printf("Could not open display %s\n", XDisplayName(NULL));
     } 
     wm._root = DefaultRootWindow(wm._display);
-    init_array(&wm._window_list, 1);
-    print_array(&wm._window_list);
+    init_array(&wm._window_list.a, 1);
+    Window *children;
+    Window returned_root;
+    Window returned_parent;
+    unsigned int nchildren;
+    XQueryTree(
+        wm._display,
+        wm._root,
+        &returned_root,
+        &returned_parent,
+        &children,
+        &nchildren);
+
+    printf("Returned Root: %lu\n", returned_root);
+    unsigned int i;
+    if (nchildren > 2) {
+        for (i = 2; i < nchildren; ++i) {
+            printf("%lu\n", children[i]);
+            push_array(&wm._window_list.a, children[i]);
+            /*
+            XSelectInput(
+                wm._display,
+                children[i],
+                KeyPressMask | KeyReleaseMask |
+                EnterWindowMask | ButtonPressMask | 
+                ButtonReleaseMask | ButtonMotionMask | 
+                OwnerGrabButtonMask);
+                */
+        }
+        /*
+        XSetInputFocus(
+            wm._display, 
+            wm._window_list.a.array[wm._window_list.a.used - 1], 
+            RevertToPointerRoot, 
+            CurrentTime);
+            */
+    }
+    print_array(&wm._window_list.a);
+    wm._fullscreen_flag = 0;
 }
 
 void
@@ -29,10 +67,16 @@ ewm_run()
     XSelectInput(
         wm._display, 
         wm._root, 
-        SubstructureRedirectMask | SubstructureNotifyMask | 
-        KeyPressMask | KeyReleaseMask |
-        ButtonPressMask | ButtonReleaseMask | 
-        OwnerGrabButtonMask);
+        // Below is the line that is causing BadAccess on X_ChangeWindowAttributes,
+        // however if SubstructureRedirectMask is not selected on root, then all 
+        // wm functions only work when root is in focus.
+        // TODO: allow child windows to configurerequest stuff
+        SubstructureRedirectMask | 
+        // StructureNotifyMask |
+        SubstructureNotifyMask);
+        // KeyPressMask | KeyReleaseMask |
+        // ButtonPressMask | ButtonReleaseMask | 
+        // OwnerGrabButtonMask);
 
     XSync(wm._display, 0);
     XGrabServer(wm._display);
@@ -51,6 +95,25 @@ ewm_run()
 
     XFree(top_level_windows);
     XUngrabServer(wm._display);
+
+    XGrabKey(
+        wm._display, 
+        XKeysymToKeycode(wm._display, XK_Return),
+        MOD,
+        wm._root,
+        1,
+        GrabModeAsync,
+        GrabModeAsync);
+
+    XGrabKey(
+        wm._display, 
+        XKeysymToKeycode(wm._display, XK_f),
+        MOD,
+        wm._root,
+        1,
+        GrabModeAsync,
+        GrabModeAsync);
+
     XGrabButton(
         wm._display,
         Button1,
@@ -82,6 +145,7 @@ ewm_run()
         switch (e.type) {
         case CreateNotify:
             printf("CreateNotify\n");
+            ewm_on_create_notify(&e.xcreatewindow);
             break;
         case DestroyNotify:
             printf("DestroyNotify\n");
@@ -90,7 +154,11 @@ ewm_run()
             printf("ReparentNotify\n");
             break;
         case MapNotify:
-            printf("Mapping Window\n");
+            // It looks like when applications that use menus (or any 
+            // window created by a client that is not the WM)
+            // cause an X BadAccess Error. this happens after below,
+            // but before the first line of on_map_request.
+            printf("Mapping window: %lu\n override redirect: %d\n", e.xmap.window, e.xmap.override_redirect);
             break;
         case UnmapNotify:
             printf("UnmapNotify\n");
@@ -101,10 +169,12 @@ ewm_run()
             break;
         case MapRequest:
             printf("MapRequest\n");
+            // XMapWindow(wm._display, e.xmaprequest.window);
             ewm_on_map_request(&e.xmaprequest);
             break;
         case ConfigureRequest:
             printf("ConfigureRequest\n");
+            ewm_on_configure_request(&e.xconfigurerequest);
             break;
         case ButtonPress:
             printf("ButtonPress\n");
@@ -112,48 +182,79 @@ ewm_run()
             break;
         case ButtonRelease:
             printf("ButtonRelease\n");
-            ewm_on_button_release(&e.xbutton);
+            // ewm_on_button_release(&e.xbutton);
+            wm._current_clicked_window = NO_WINDOW;
             break;
         case MotionNotify:
             ewm_on_motion_notify(&e.xmotion);
             break;
         case KeyPress:
-            printf("KeyPress\n");
             ewm_on_key_press(&e.xkey);
             break;
         case KeyRelease:
-            printf("KeyRelease\n");
             break;
         case EnterNotify:
             ewm_on_enter_notify(&e.xcrossing);
             break;
         default:
-            printf("Something else\n");
+            printf("Something else: %d\n", e.type);
+            break;
         }
     }
 }
 
 void
+ewm_on_create_notify(const XCreateWindowEvent *e)
+{
+    printf("window %lu: requesting creation\n", e->window);
+}
+
+void
 ewm_on_map_request(const XMapRequestEvent *e)
 {
-    printf("Mapping window: %lu\n", e->window);
+    XWindowAttributes wa;
+    if (!XGetWindowAttributes(wm._display, e->window, &wa))
+        return;
+    if(wa.override_redirect) {
+        XMapWindow(wm._display, e->window);
+        return;
+    }
 
+    printf("Mapping window: %lu\n", e->window);
     XMapWindow(wm._display, e->window);
-    push_array(&wm._window_list, e->window);
+    printf("Pushing array\n");
+    push_array(&wm._window_list.a, e->window);
+    printf("Setting input focus\n");
     XSetInputFocus(wm._display, e->window, RevertToPointerRoot, CurrentTime);
+    printf("Selecting input\n");
     XSelectInput(
         wm._display,
         e->window,
+        EnterWindowMask);
+    /*
+        | KeyPressMask);
         KeyPressMask | KeyReleaseMask |
         EnterWindowMask | ButtonPressMask | 
         ButtonReleaseMask | ButtonMotionMask | 
         OwnerGrabButtonMask);
-    print_array(&wm._window_list);
+        */
+    /*
+    print_array(&wm._window_list.a);
+    */
+}
+
+void
+ewm_on_configure_request(const XConfigureRequestEvent *e)
+{
+    printf("Configure Request sent by client: %lu\n", e->window);
+
 }
 
 void
 ewm_on_enter_notify(const XEnterWindowEvent *e)
 {
+    if (e->window == 0) printf("Root window\n");
+
     printf("Entered window: %lu\n", e->window);
     XSetInputFocus(wm._display, e->window, RevertToParent, CurrentTime);
 
@@ -211,13 +312,24 @@ ewm_on_key_press(const XKeyEvent *e)
             printf("Opening rofi\n");
             system("dmenu_run");
     }
+
+    if ((e->state & MOD) &&
+        e->keycode == XKeysymToKeycode(wm._display, XK_f)) {
+        // printf("Making window %lu fullscreen\n", e->subwindow);
+        Window focus_window;
+        int revert_return;
+        XGetInputFocus(wm._display, &focus_window, &revert_return);
+        printf("Current focused window: %lu\n", focus_window);
+        fullscreen(focus_window);
+    }
+
 }
 
 void
 ewm_on_unmap_notify(const XUnmapEvent *e)
 {
-    remove_array(&wm._window_list, e->window);
-    print_array(&wm._window_list);
+    remove_array(&wm._window_list.a, e->window);
+    print_array(&wm._window_list.a);
 
     // Currently this creates behaviour where the next most recently created window
     // gains focus after a window is unmapped. This works as I intended but
@@ -225,9 +337,9 @@ ewm_on_unmap_notify(const XUnmapEvent *e)
     // 
     // TODO: figure out a more intuitive way to inherit focus once tiling functions are written.
     
-    if (wm._window_list.used > 0) {
-        XSetInputFocus(wm._display, wm._window_list.array[wm._window_list.used - 1], RevertToPointerRoot, CurrentTime);
-        printf("Focusing on window: %lu\n", wm._window_list.array[wm._window_list.used - 1]);
+    if (wm._window_list.a.used > 0) {
+        XSetInputFocus(wm._display, wm._window_list.a.array[wm._window_list.a.used - 1], RevertToPointerRoot, CurrentTime);
+        printf("Focusing on window: %lu\n", wm._window_list.a.array[wm._window_list.a.used - 1]);
     }
 }
 
@@ -275,13 +387,16 @@ ewm_on_button_press(const XButtonEvent *e)
             None);
         printf("Button Ungrabbed\n");
     }
+    
 }
 
+/*
 void
 ewm_on_button_release(const XButtonEvent *e)
 {
     wm._current_clicked_window = NO_WINDOW;
 }
+*/
 
 void
 ewm_on_motion_notify(const XMotionEvent *e)
@@ -350,5 +465,34 @@ void
 ewm_cleanup()
 {
     XCloseDisplay(wm._display);
-    free_array(&wm._window_list);
+    free_array(&wm._window_list.a);
+}
+
+void
+fullscreen(const Window w)
+{
+    if (!w) 
+        return;
+
+    if (!wm._fullscreen_flag) {
+
+        // XGetWindowAttributes(wm._display, w, &saved_window_state);
+        XGetWindowAttributes(wm._display, w, &wm._fullscreen_window);
+         
+        // This sets wm._fullscreen_window to point to saved window state, it does not set it to copy its contents.
+        // wm._fullscreen_window = &saved_window_state;
+        printf("Making window %lu fullscreen\n", w);
+        Window returned_root;
+        int x, y;
+        unsigned int border_width, depth, width, height;
+        XGetGeometry(wm._display, wm._root, &returned_root, &x, &y, &width, &height, &border_width, &depth);
+        XMoveResizeWindow(wm._display, w, x, y, width, height);
+        wm._fullscreen_flag = 1;
+    } else {
+        XMoveResizeWindow(wm._display, w, wm._fullscreen_window.x, wm._fullscreen_window.y, wm._fullscreen_window.width, wm._fullscreen_window.height);
+        // wm._fullscreen_window = NULL;
+        wm._fullscreen_flag = 0;
+        printf("Making window %lu not fullscreen\n", w);
+    }
+    
 }
