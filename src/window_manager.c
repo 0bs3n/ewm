@@ -8,6 +8,9 @@
 #define MOD Mod4Mask
 #define NO_WINDOW 0x0
 
+// TODO: utilize XGrabButton() and XAllowEvents()/XSendEvents() instead of current set up
+// grabbing and ungrabbing buttons
+
 ewm_instance wm;
 XWindowAttributes saved_window_state;
 
@@ -36,26 +39,19 @@ ewm_init()
     printf("Returned Root: %lu\n", returned_root);
     unsigned int i;
     if (nchildren > 2) {
-        for (i = 2; i < nchildren; ++i) {
+        for (i = 1; i < nchildren; ++i) {
             printf("%lu\n", children[i]);
             push_array(&wm._window_list.a, children[i]);
-            /*
             XSelectInput(
                 wm._display,
                 children[i],
-                KeyPressMask | KeyReleaseMask |
-                EnterWindowMask | ButtonPressMask | 
-                ButtonReleaseMask | ButtonMotionMask | 
-                OwnerGrabButtonMask);
-                */
+                EnterWindowMask);
         }
-        /*
         XSetInputFocus(
             wm._display, 
             wm._window_list.a.array[wm._window_list.a.used - 1], 
             RevertToPointerRoot, 
             CurrentTime);
-            */
     }
     print_array(&wm._window_list.a);
     wm._fullscreen_flag = 0;
@@ -476,11 +472,8 @@ fullscreen(const Window w)
 
     if (!wm._fullscreen_flag) {
 
-        // XGetWindowAttributes(wm._display, w, &saved_window_state);
         XGetWindowAttributes(wm._display, w, &wm._fullscreen_window);
          
-        // This sets wm._fullscreen_window to point to saved window state, it does not set it to copy its contents.
-        // wm._fullscreen_window = &saved_window_state;
         printf("Making window %lu fullscreen\n", w);
         Window returned_root;
         int x, y;
@@ -489,8 +482,14 @@ fullscreen(const Window w)
         XMoveResizeWindow(wm._display, w, x, y, width, height);
         wm._fullscreen_flag = 1;
     } else {
-        XMoveResizeWindow(wm._display, w, wm._fullscreen_window.x, wm._fullscreen_window.y, wm._fullscreen_window.width, wm._fullscreen_window.height);
-        // wm._fullscreen_window = NULL;
+        XMoveResizeWindow(
+                wm._display, 
+                w, 
+                wm._fullscreen_window.x, 
+                wm._fullscreen_window.y, 
+                wm._fullscreen_window.width, 
+                wm._fullscreen_window.height);
+
         wm._fullscreen_flag = 0;
         printf("Making window %lu not fullscreen\n", w);
     }
