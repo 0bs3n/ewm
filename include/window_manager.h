@@ -47,5 +47,4 @@ void ewm_on_key_press(const XKeyEvent *e);
 void ewm_on_motion_notify(const XMotionEvent *e);
 void ewm_on_enter_notify(const XEnterWindowEvent *e);
 void ewm_on_create_notify(const XCreateWindowEvent *e);
-
-
+void ewm_on_focusin(const XFocusInEvent *e);

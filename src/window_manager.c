@@ -8,9 +8,6 @@
 #define MOD Mod4Mask
 #define NO_WINDOW 0x0
 
-// TODO: utilize XGrabButton() and XAllowEvents()/XSendEvents() instead of current set up
-// grabbing and ungrabbing buttons
-
 ewm_instance wm;
 XWindowAttributes saved_window_state;
 
@@ -68,11 +65,7 @@ ewm_run()
         // wm functions only work when root is in focus.
         // TODO: allow child windows to configurerequest stuff
         SubstructureRedirectMask | 
-        // StructureNotifyMask |
         SubstructureNotifyMask);
-        // KeyPressMask | KeyReleaseMask |
-        // ButtonPressMask | ButtonReleaseMask | 
-        // OwnerGrabButtonMask);
 
     XSync(wm._display, 0);
     XGrabServer(wm._display);
@@ -97,7 +90,25 @@ ewm_run()
         XKeysymToKeycode(wm._display, XK_Return),
         MOD,
         wm._root,
-        1,
+        0,
+        GrabModeAsync,
+        GrabModeAsync);
+
+    XGrabKey(
+        wm._display, 
+        XKeysymToKeycode(wm._display, XK_d),
+        MOD,
+        wm._root,
+        0,
+        GrabModeAsync,
+        GrabModeAsync);
+
+    XGrabKey(
+        wm._display, 
+        XKeysymToKeycode(wm._display, XK_q),
+        MOD,
+        wm._root,
+        0,
         GrabModeAsync,
         GrabModeAsync);
 
@@ -106,7 +117,7 @@ ewm_run()
         XKeysymToKeycode(wm._display, XK_f),
         MOD,
         wm._root,
-        1,
+        0,
         GrabModeAsync,
         GrabModeAsync);
 
@@ -115,19 +126,19 @@ ewm_run()
         Button1,
         MOD,
         wm._root,
-        1,
+        0,
         ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
         GrabModeAsync,
         GrabModeAsync,
         None,
         None);
-    
+
     XGrabButton(
         wm._display,
         Button3,
         MOD,
         wm._root,
-        1,
+        0,
         ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
         GrabModeAsync,
         GrabModeAsync,
@@ -139,6 +150,9 @@ ewm_run()
         XNextEvent(wm._display, &e);
 
         switch (e.type) {
+        case FocusIn:
+            ewm_on_focusin(&e.xfocus);
+            break;
         case CreateNotify:
             printf("CreateNotify\n");
             ewm_on_create_notify(&e.xcreatewindow);
@@ -165,7 +179,6 @@ ewm_run()
             break;
         case MapRequest:
             printf("MapRequest\n");
-            // XMapWindow(wm._display, e.xmaprequest.window);
             ewm_on_map_request(&e.xmaprequest);
             break;
         case ConfigureRequest:
@@ -178,7 +191,6 @@ ewm_run()
             break;
         case ButtonRelease:
             printf("ButtonRelease\n");
-            // ewm_on_button_release(&e.xbutton);
             wm._current_clicked_window = NO_WINDOW;
             break;
         case MotionNotify:
@@ -226,17 +238,48 @@ ewm_on_map_request(const XMapRequestEvent *e)
     XSelectInput(
         wm._display,
         e->window,
-        EnterWindowMask);
-    /*
-        | KeyPressMask);
-        KeyPressMask | KeyReleaseMask |
-        EnterWindowMask | ButtonPressMask | 
-        ButtonReleaseMask | ButtonMotionMask | 
-        OwnerGrabButtonMask);
-        */
-    /*
-    print_array(&wm._window_list.a);
-    */
+        EnterWindowMask |
+        FocusChangeMask);
+}
+
+void
+ewm_on_focusin(const XFocusInEvent *e)
+{
+    printf("Focuesed on window %lu\n", e->window);
+    XGrabButton(
+        wm._display,
+        AnyButton,
+        AnyModifier,
+        wm._root,
+        0,
+        ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
+        GrabModeSync,
+        GrabModeSync,
+        None,
+        None);
+    XGrabButton(
+        wm._display,
+        Button1,
+        MOD,
+        wm._root,
+        0,
+        ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
+        GrabModeAsync,
+        GrabModeAsync,
+        None,
+        None);
+    
+    XGrabButton(
+        wm._display,
+        Button3,
+        MOD,
+        wm._root,
+        0,
+        ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
+        GrabModeAsync,
+        GrabModeAsync,
+        None,
+        None);
 }
 
 void
@@ -253,33 +296,7 @@ ewm_on_enter_notify(const XEnterWindowEvent *e)
 
     printf("Entered window: %lu\n", e->window);
     XSetInputFocus(wm._display, e->window, RevertToParent, CurrentTime);
-
-    Window *children;
-    Window returned_root;
-    Window returned_parent;
-    unsigned int nchildren;
-    XQueryTree(
-        wm._display,
-        wm._root,
-        &returned_root,
-        &returned_parent,
-        &children,
-        &nchildren);
-
-    if (e->window != children[nchildren - 1]) {
-        XGrabButton(
-            wm._display,
-            Button1,
-            AnyModifier,
-            wm._root,
-            1,
-            ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
-            GrabModeAsync,
-            GrabModeAsync,
-            None,
-            None);
-        printf("Button Grabbed\n");
-    }
+    
 }
 
 
@@ -289,7 +306,9 @@ ewm_on_key_press(const XKeyEvent *e)
     if ((e->state & MOD) && 
         e->keycode == XKeysymToKeycode(wm._display, XK_q)) {
             printf("Destroying window\n");
-            XDestroyWindow(wm._display, e->window);
+            if (e->subwindow)
+                XDestroySubwindows(wm._display, e->subwindow);
+                XDestroyWindow(wm._display, e->subwindow);
     }
 
     if ((e->state & MOD) && 
@@ -303,15 +322,19 @@ ewm_on_key_press(const XKeyEvent *e)
         }
     }
 
-    if ((e->state & Mod4Mask) && 
+    if ((e->state & MOD) && 
         e->keycode == XKeysymToKeycode(wm._display, XK_d)) {
             printf("Opening rofi\n");
-            system("dmenu_run");
+            if (fork() == 0) {
+                char* args[] = {"d_run", NULL};
+                setsid();
+                execvp(args[0], args);
+                    perror("execvp");
+            }
     }
 
     if ((e->state & MOD) &&
         e->keycode == XKeysymToKeycode(wm._display, XK_f)) {
-        // printf("Making window %lu fullscreen\n", e->subwindow);
         Window focus_window;
         int revert_return;
         XGetInputFocus(wm._display, &focus_window, &revert_return);
@@ -344,6 +367,7 @@ void
 ewm_on_button_press(const XButtonEvent *e)
 {
     if (e->subwindow != 0) {
+        printf("%lu\n", e->subwindow);
         wm._current_clicked_window = e->subwindow;
         
         // Save initial cursor position;
@@ -362,53 +386,30 @@ ewm_on_button_press(const XButtonEvent *e)
                      &depth);
         wm._window_start_position = (Vector){x, y};
         wm._window_start_size = (Size){width, height};
-
         XRaiseWindow(wm._display, e->subwindow);
         XSetInputFocus(wm._display, e->subwindow, RevertToParent, CurrentTime);
         printf("Raising window %lu\n", e->subwindow);
-
-        // TODO XSendEvent() may be able to pass the button event to the child window
-        // foregoing the need for the current workaround (below)
-        XUngrabButton(wm._display, Button1, AnyModifier, wm._root);
-        XGrabButton(
-            wm._display,
-            Button1,
-            MOD,
-            wm._root,
-            1,
-            ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
-            GrabModeAsync,
-            GrabModeAsync,
-            None,
-            None);
-        printf("Button Ungrabbed\n");
     }
-    
+
+    XAllowEvents(wm._display, ReplayPointer, CurrentTime);
+    XAllowEvents(wm._display, ReplayKeyboard, CurrentTime);
 }
 
-/*
-void
-ewm_on_button_release(const XButtonEvent *e)
-{
-    wm._current_clicked_window = NO_WINDOW;
-}
-*/
 
 void
 ewm_on_motion_notify(const XMotionEvent *e)
 {
     printf("Current wm.window: %lu\n", wm._current_clicked_window);
-    //current cursor position
     const Vector drag_pos = {e->x_root, e->y_root};
     printf("x_root: %d, y_root: %d\n", e->x_root, e->y_root);
 
-    // Change in pixels of the cursor since ButtonPressEvent set wm._cursor_start_position (last button press)
     const Vector delta = {
         (drag_pos.x - wm._cursor_start_position.x), 
         (drag_pos.y - wm._cursor_start_position.y)
     };
     printf("delta.x: %d, delta.y: %d\n", delta.x, delta.y);
-    printf("cursor start.x: %d, cursor start.y: %d\n", wm._cursor_start_position.x, wm._cursor_start_position.y);
+    printf("cursor start.x: %d, cursor start.y: %d\n", 
+            wm._cursor_start_position.x, wm._cursor_start_position.y);
 
 
     if ((e->state & Button1Mask) && (e->state & MOD)) {
@@ -429,15 +430,16 @@ ewm_on_motion_notify(const XMotionEvent *e)
 
         
         Vector size_delta = {
-            (delta.x > (signed)-wm._window_start_size.width ? delta.x : (signed)-wm._window_start_size.width),
-            (delta.y > (signed)-wm._window_start_size.height ? delta.y : (signed)-wm._window_start_size.height)
+            (delta.x > (signed)-wm._window_start_size.width ?
+                delta.x : (signed)-wm._window_start_size.width),
+            (delta.y > (signed)-wm._window_start_size.height ?
+                delta.y : (signed)-wm._window_start_size.height)
         };
+
         printf("size_delta x: %d\n", size_delta.x);
         printf("size_delta y: %d\n", size_delta.y);
         printf("window start size width: %d\n", wm._window_start_size.width);
         printf("window start size height: %d\n", wm._window_start_size.height);
-            // size_delta.x = delta.x;
-            // size_delta.y = delta.y;
 
         const Size dest_window_size = {
             wm._window_start_size.width + size_delta.x,
@@ -478,6 +480,7 @@ fullscreen(const Window w)
         Window returned_root;
         int x, y;
         unsigned int border_width, depth, width, height;
+        XRaiseWindow(wm._display, w);
         XGetGeometry(wm._display, wm._root, &returned_root, &x, &y, &width, &height, &border_width, &depth);
         XMoveResizeWindow(wm._display, w, x, y, width, height);
         wm._fullscreen_flag = 1;
